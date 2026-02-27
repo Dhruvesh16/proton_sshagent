@@ -9,41 +9,13 @@ PROTON_PIN_SESSION_TTL=900  # 15 minutes — re-ask after this
 
 _proton_ensure_agent() {
     local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
-    local max_wait=30
 
-    # Fast path — agent already has keys
     if SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
         export SSH_AUTH_SOCK="$sock"
         return 0
     fi
 
-    # Check if Proton Pass is logged in
-    if ! pass-cli info &>/dev/null; then
-        echo "🔒 Proton Pass is locked. Please log in:" >/dev/tty
-        pass-cli login </dev/tty
-        if [ $? -ne 0 ]; then
-            echo "❌ Proton Pass login failed." >&2
-            return 1
-        fi
-        echo "✅ Logged in. Waiting for SSH agent to start..." >/dev/tty
-    else
-        echo "⏳ Proton Pass agent starting, please wait..." >/dev/tty
-    fi
-
-    # Wait for agent socket to appear and load keys
-    local elapsed=0
-    while [ $elapsed -lt $max_wait ]; do
-        if SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
-            export SSH_AUTH_SOCK="$sock"
-            echo "✅ SSH agent ready." >/dev/tty
-            return 0
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-
-    echo "❌ SSH agent did not start within ${max_wait}s." >&2
-    echo "   Check service:  systemctl --user status proton-pass-ssh-agent" >&2
+    echo "🔒 Proton Pass is locked. Unlock the Proton Pass desktop app and try again." >&2
     return 1
 }
 
