@@ -5,6 +5,7 @@ Use **Proton Pass** as a native SSH agent on Linux, the same way [1Password SSH 
 - **One socket** → set `SSH_AUTH_SOCK` → SSH and git signing just work
 - **No separate PIN** → Proton Pass's own biometric / master password is the gate
 - **Automatic unlock prompts** → when keys are needed, the app is brought to focus
+- **Session auto-lock** → keys are purged from memory after 15 min of inactivity (like 1Password / sudo)
 - **Desktop-first** → auto-detects Proton Pass desktop app's native socket; falls back to `pass-cli`
 
 ## How it compares to 1Password
@@ -14,6 +15,7 @@ Use **Proton Pass** as a native SSH agent on Linux, the same way [1Password SSH 
 | Socket path | `~/.1password/agent.sock` | `~/.ssh/proton-pass-agent.sock` |
 | Auth mechanism | App biometric / master password | App master password / biometric |
 | Extra PIN required | No | No |
+| Auto-lock | Configurable timeout | 15 min session timeout (configurable) |
 | Git commit signing | Automatic via SSH agent | Automatic via SSH agent |
 | Desktop app integration | Native | Native + pass-cli fallback |
 | Systemd service | Not needed (app manages) | Supervisor for reliability |
@@ -42,7 +44,7 @@ That's it. SSH and git signing work automatically whenever Proton Pass is unlock
 | `setup.sh` | One-shot installer — sets up everything |
 | `proton-pass-ssh-agent-wrapper.sh` | Agent supervisor — auto-detects desktop socket, falls back to pass-cli |
 | `proton-pass-ssh-agent.service` | Systemd user service — keeps the agent running |
-| `proton-git-wrapper.sh` | Transparent git wrapper — prompts for Proton Pass unlock on push/sign |
+| `proton-git-wrapper.sh` | Transparent git wrapper — prompts for Proton Pass unlock on push/sign, enforces session timeout |
 | `setup-git-signing.sh` | One-time git signing configuration |
 | `uninstall.sh` | Clean removal of everything |
 
@@ -81,11 +83,28 @@ When the vault is locked, the wrapper:
 
 No separate PIN. No extra credentials. Just unlock Proton Pass.
 
+### Session Auto-Lock (Security)
+
+> **Why this matters:** Proton Pass's `pass-cli ssh-agent` caches keys in memory
+> independently from the desktop app's lock state. Unlike 1Password (whose agent
+> is part of the desktop app), `pass-cli`'s agent will serve keys even when the
+> desktop app shows "Enter your PIN". This project fixes that gap.
+
+The git wrapper enforces a **session timeout** (like `sudo` or 1Password's auto-lock):
+
+1. After **15 minutes of inactivity** (configurable via `PROTON_SESSION_TIMEOUT`), the session expires
+2. When expired, the wrapper **kills the SSH agent** — purging all cached keys from memory
+3. The systemd service **automatically restarts** the agent
+4. The user must **unlock Proton Pass** before the next git push/sign operation
+
+This ensures that a locked desktop app actually prevents git operations.
+
 ### Shell Helpers
 
 ```bash
-proton-status    # Show agent status and available keys
-proton-lock      # Remind to lock via the desktop app
+proton-status    # Show agent status, session expiry countdown, available keys
+proton-lock      # Immediately lock: kills agent, purges keys, invalidates session
+proton-unlock    # Start a fresh session (verifies agent is alive and has keys)
 ```
 
 ## Git commit signing
@@ -114,6 +133,7 @@ git log --show-signature -1
 | `PROTON_PASS_AGENT_SOCK` | (none) | Override native socket detection |
 | `PROTON_PASS_CLI` | auto-detected | Path to pass-cli binary |
 | `PROTON_UNLOCK_TIMEOUT` | `60` | Seconds to wait for vault unlock |
+| `PROTON_SESSION_TIMEOUT` | `900` | Session auto-lock timeout in seconds (15 min) |
 
 ### Per-host SSH config
 

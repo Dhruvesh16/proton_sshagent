@@ -5,6 +5,12 @@
 #
 # The agent stays running as long as Proton Pass is open.
 # No manual login required — the desktop app handles authentication.
+#
+# SECURITY NOTE: pass-cli's ssh-agent caches keys in memory independently
+# of the desktop app's lock state. The git wrapper (proton-git-wrapper.sh)
+# enforces a session timeout and kills this agent to purge cached keys.
+# When killed by the git wrapper (proton-lock), this script will cleanly
+# restart the agent on the next loop iteration.
 
 set -euo pipefail
 
@@ -43,6 +49,16 @@ RESTART_DELAY=3     # seconds before restarting a crashed CLI agent
 
 log() { echo "[proton-agent] $*"; }
 
+# Handle SIGTERM/SIGINT gracefully (from proton-lock killing us)
+cleanup() {
+    log "Received signal, cleaning up..."
+    rm -f "$MANAGED_SOCKET" "$CANONICAL_SOCKET" 2>/dev/null
+    # Kill child agent process if running
+    [[ -n "${AGENT_PID:-}" ]] && kill "$AGENT_PID" 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
 # ── Detect a live native socket from the Proton Pass desktop app ──────────────
 find_native_socket() {
     for sock in "${NATIVE_SOCKETS[@]}"; do
@@ -74,6 +90,7 @@ link_canonical() {
 # ── Main supervisor loop ─────────────────────────────────────────────────────
 log "Starting Proton Pass SSH agent supervisor..."
 log "Canonical socket: $CANONICAL_SOCKET"
+AGENT_PID=""
 
 while true; do
     # ── Strategy 1: Use the desktop app's native socket (like 1Password) ──────
@@ -130,9 +147,10 @@ while true; do
         log "Agent running (PID $AGENT_PID)."
     fi
 
-    # Wait for agent to exit
+    # Wait for agent to exit (killed by proton-lock or crash)
     wait "$AGENT_PID" 2>/dev/null || true
     EXIT_CODE=$?
+    AGENT_PID=""
 
     log "Agent exited (code=$EXIT_CODE). Restarting in ${RESTART_DELAY}s..."
     rm -f "$MANAGED_SOCKET" "$CANONICAL_SOCKET"

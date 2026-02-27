@@ -78,15 +78,21 @@ echo "  Git global signing config removed."
 # ── Unset git() function from current shell ──────────────────────────────────
 unset -f git 2>/dev/null && echo "  git() function unset." || true
 unset -f proton-lock 2>/dev/null || true
+unset -f proton-unlock 2>/dev/null || true
 unset -f proton-status 2>/dev/null || true
 unset -f _proton_ensure_agent 2>/dev/null || true
 unset -f _proton_focus_app 2>/dev/null || true
 unset -f _proton_needs_signing 2>/dev/null || true
+unset -f _proton_session_valid 2>/dev/null || true
+unset -f _proton_session_touch 2>/dev/null || true
+unset -f _proton_session_invalidate 2>/dev/null || true
+unset -f _proton_kill_agent 2>/dev/null || true
 
-# ── Remove legacy PIN files ──────────────────────────────────────────────────
+# ── Remove legacy PIN files and session files ─────────────────────────────────
 rm -f ~/.config/proton-pass-pin-hash
 rm -f "/tmp/.proton-pin-session-$(id -u)"
-echo "  Legacy PIN files removed."
+rm -f "/tmp/.proton-session-$(id -u)"
+echo "  Legacy PIN files and session files removed."
 
 echo ""
 echo "=== Uninstall complete. ==="
