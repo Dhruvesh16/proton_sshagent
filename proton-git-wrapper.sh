@@ -14,15 +14,37 @@ _proton_ensure_agent() {
         return 1
     fi
 
-    # Ask the agent to list accessible keys.
-    # When Proton Pass is locked (PIN screen), the agent socket is present
-    # but returns NO keys — ssh-add -L will output nothing.
-    # Only when the vault is actually unlocked are keys returned.
+    # Ask the agent for keys. When vault is locked the agent returns nothing.
     local keys
     keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
+
     if [[ -z "$keys" ]]; then
-        echo "🔒 Proton Pass is locked. Unlock the Proton Pass desktop app and try again." >&2
-        return 1
+        echo "🔒 Proton Pass is locked — bringing app to front, waiting for you to unlock..." >&2
+
+        # Focus the Proton Pass window so the PIN dialog appears on top
+        if command -v wmctrl &>/dev/null; then
+            wmctrl -a "Proton Pass" 2>/dev/null
+        fi
+        if command -v xdotool &>/dev/null; then
+            xdotool search --name "Proton Pass" windowactivate --sync 2>/dev/null
+        fi
+
+        # Poll every second for up to 60 s (like 1Password)
+        local waited=0
+        while [[ $waited -lt 60 ]]; do
+            sleep 1
+            waited=$((waited + 1))
+            keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
+            if [[ -n "$keys" ]]; then
+                echo "✅ Proton Pass unlocked. Continuing..." >&2
+                break
+            fi
+        done
+
+        if [[ -z "$keys" ]]; then
+            echo "❌ Timed out waiting for Proton Pass to unlock." >&2
+            return 1
+        fi
     fi
 
     export SSH_AUTH_SOCK="$sock"
