@@ -2,7 +2,7 @@
 # Supervised Proton Pass SSH Agent wrapper
 # Waits for login, starts agent, restarts it if it dies
 
-PASS_CLI="$HOME/.local/bin/pass-cli"
+PASS_CLI="/usr/bin/pass-cli"
 SOCKET_PATH="$HOME/.ssh/proton-pass-agent.sock"
 CHECK_INTERVAL=20   # seconds to wait between login checks when not logged in
 RESTART_DELAY=3     # seconds to wait before restarting a crashed agent
