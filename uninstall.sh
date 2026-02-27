@@ -80,6 +80,9 @@ git config --global --unset tag.gpgsign 2>/dev/null || true
 git config --global --unset gpg.ssh.allowedsignersfile 2>/dev/null || true
 echo "  Git global signing config removed."
 
+# Unset git() function from current shell (only effective when sourced)
+unset -f git 2>/dev/null && echo "  git() function unset from current shell." || true
+
 # Remove PIN files
 rm -f ~/.config/proton-pass-pin-hash
 rm -f /tmp/.proton-pin-session-$(id -u)

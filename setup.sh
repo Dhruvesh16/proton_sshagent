@@ -1,6 +1,7 @@
 #!/bin/bash
-# setup.sh — Install Proton Pass SSH Agent & git PIN gate
-# Run once on a new machine to wire everything up.
+# setup.sh — Install Proton Pass SSH Agent & git auth gate
+# Run as:  source ./setup.sh
+# (sourcing loads the git wrapper into your CURRENT shell immediately)
 
 set -e
 
@@ -147,14 +148,37 @@ else
 fi
 
 echo ""
+# ── Load wrapper into the CURRENT shell (only works when sourced) ────────────
+# Unset any stale git() function from a previous version, then reload fresh.
+unset -f git 2>/dev/null || true
+# shellcheck disable=SC1090
+if [[ -f "$BIN_DIR/proton-git-wrapper.sh" ]]; then
+    # source only works when this script is itself sourced
+    # shellcheck disable=SC1090
+    source "$BIN_DIR/proton-git-wrapper.sh" 2>/dev/null && \
+        echo "      git() wrapper loaded into current shell." || true
+fi
+
+echo ""
 echo "=== Setup complete! ==="
 echo ""
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "⚠️  You ran this as a script — the git wrapper is NOT yet active here."
+    echo "   Run these NOW in this terminal:"
+    echo ""
+    echo "     unset -f git && source ~/.local/bin/proton-git-wrapper.sh"
+    echo ""
+    echo "   Or start a new terminal (which will source ~/.bashrc automatically)."
+    echo ""
+else
+    echo "✅ Git wrapper is active in this shell."
+    echo ""
+fi
 echo "Next steps:"
-echo "  1. Reload your shell:"
-echo "       bash/zsh:  source ~/.bashrc"
-echo "       fish:      source ~/.config/fish/config.fish"
-echo "  2. If not logged in yet:"
+echo "  1. If not logged in yet:"
 echo "       pass-cli login"
 echo "       setup-git-signing.sh"
-echo "  3. Test SSH:"
+echo "  2. Test SSH:"
 echo "       ssh -T git@github.com"
+echo "  3. Test signing (with Proton Pass locked):"
+echo "       git commit --allow-empty -m 'test' -S"
