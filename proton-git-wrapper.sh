@@ -7,6 +7,46 @@ PROTON_PIN_HASH_FILE="$HOME/.config/proton-pass-pin-hash"
 PROTON_PIN_SESSION_FILE="/tmp/.proton-pin-session-$(id -u)"
 PROTON_PIN_SESSION_TTL=900  # 15 minutes — re-ask after this
 
+_proton_ensure_agent() {
+    local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
+    local max_wait=30
+
+    # Fast path — agent already has keys
+    if SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
+        export SSH_AUTH_SOCK="$sock"
+        return 0
+    fi
+
+    # Check if Proton Pass is logged in
+    if ! pass-cli info &>/dev/null; then
+        echo "🔒 Proton Pass is locked. Please log in:" >/dev/tty
+        pass-cli login </dev/tty
+        if [ $? -ne 0 ]; then
+            echo "❌ Proton Pass login failed." >&2
+            return 1
+        fi
+        echo "✅ Logged in. Waiting for SSH agent to start..." >/dev/tty
+    else
+        echo "⏳ Proton Pass agent starting, please wait..." >/dev/tty
+    fi
+
+    # Wait for agent socket to appear and load keys
+    local elapsed=0
+    while [ $elapsed -lt $max_wait ]; do
+        if SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
+            export SSH_AUTH_SOCK="$sock"
+            echo "✅ SSH agent ready." >/dev/tty
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo "❌ SSH agent did not start within ${max_wait}s." >&2
+    echo "   Check service:  systemctl --user status proton-pass-ssh-agent" >&2
+    return 1
+}
+
 _proton_verify_pin() {
     # If no PIN is set, skip verification
     if [ ! -f "$PROTON_PIN_HASH_FILE" ]; then
@@ -57,6 +97,7 @@ _proton_verify_pin() {
 git() {
     case "$1" in
         push|push-*)
+            _proton_ensure_agent || return 1
             _proton_verify_pin || return 1
             ;;
         commit)
@@ -78,20 +119,15 @@ git() {
                     echo "   Run: setup-git-signing.sh" >&2
                     return 1
                 fi
-                # Ensure the Proton Pass SSH agent socket is reachable
-                local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
-                if ! SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
-                    echo "❌ Proton Pass SSH agent is not running or has no keys." >&2
-                    echo "   Make sure you are logged in:  pass-cli login" >&2
-                    echo "   Check service status:         systemctl --user status proton-pass-ssh-agent" >&2
-                    return 1
-                fi
+                # Ensure the Proton Pass SSH agent is up (prompt login if locked)
+                _proton_ensure_agent || return 1
                 _proton_verify_pin || return 1
             fi
             ;;
         tag)
             # Check if signing is involved (-s flag or tag.gpgsign=true)
             if [[ "$*" == *"-s"* ]] || [[ "$(command git config --get tag.gpgsign 2>/dev/null)" == "true" ]]; then
+                _proton_ensure_agent || return 1
                 _proton_verify_pin || return 1
             fi
             ;;
