@@ -119,17 +119,31 @@ fi
 # ── 7. Set git to use SSH signing format (prevent GPG fallback) ───────────────
 echo "[6/6] Configuring git to use SSH signing format ..."
 git config --global gpg.format ssh
-echo "      gpg.format=ssh set globally."
+# defaultKeyCommand: git asks the SSH agent directly for a key.
+# This means signing works immediately after unlock with no explicit user.signingkey needed.
+git config --global gpg.ssh.defaultKeyCommand "ssh-add -L"
+echo "      gpg.format=ssh and gpg.ssh.defaultKeyCommand set globally."
 
 # ── Auto-configure git SSH signing if agent is already running ────────────────
 echo ""
-echo "Checking if Proton Pass is logged in to auto-configure git signing..."
-if SSH_AUTH_SOCK="$SOCKET_PATH" ssh-add -l &>/dev/null; then
-    echo "Agent is live — running setup-git-signing.sh automatically..."
+echo "Checking if Proton Pass is unlocked to auto-configure git signing..."
+
+# Retry for up to 8 s — the systemd service may need a moment to start
+KEYS=""
+for i in 1 2 3 4; do
+    KEYS=$(SSH_AUTH_SOCK="$SOCKET_PATH" ssh-add -L 2>/dev/null)
+    if [[ -n "$KEYS" ]]; then break; fi
+    echo "      Waiting for agent... ($i/4)"
+    sleep 2
+done
+
+if [[ -n "$KEYS" ]]; then
+    echo "      Agent is live — running setup-git-signing.sh automatically..."
     SSH_AUTH_SOCK="$SOCKET_PATH" bash "$BIN_DIR/setup-git-signing.sh"
 else
-    echo "      Agent not ready yet (login required)."
-    echo "      After logging in, run:  setup-git-signing.sh"
+    echo "      Agent not ready (Proton Pass may be locked or not logged in)."
+    echo "      After unlocking, run:  setup-git-signing.sh"
+    echo "      (git signing will still work via gpg.ssh.defaultKeyCommand once unlocked)"
 fi
 
 echo ""
