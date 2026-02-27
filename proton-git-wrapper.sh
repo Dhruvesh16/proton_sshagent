@@ -10,13 +10,21 @@ PROTON_PIN_SESSION_TTL=900  # 15 minutes — re-ask after this
 _proton_ensure_agent() {
     local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
 
-    if SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
-        export SSH_AUTH_SOCK="$sock"
-        return 0
+    # Check if the Proton Pass desktop app is currently unlocked
+    if ! pass-cli info &>/dev/null; then
+        echo "🔒 Proton Pass is locked. Unlock the Proton Pass desktop app and try again." >&2
+        return 1
     fi
 
-    echo "🔒 Proton Pass is locked. Unlock the Proton Pass desktop app and try again." >&2
-    return 1
+    # App is unlocked — make sure the agent socket is alive
+    if ! SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
+        echo "❌ Proton Pass SSH agent socket not found." >&2
+        echo "   Check service:  systemctl --user status proton-pass-ssh-agent" >&2
+        return 1
+    fi
+
+    export SSH_AUTH_SOCK="$sock"
+    return 0
 }
 
 _proton_verify_pin() {
