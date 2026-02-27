@@ -1,12 +1,28 @@
 #!/bin/bash
-# Setup PIN for Proton Pass git authentication gate
-PIN_HASH_FILE="$HOME/.config/proton-pass-pin-hash"
+# proton-pin-setup — DEPRECATED
+#
+# This script is no longer needed. The native SSH agent setup (1Password-style)
+# uses Proton Pass's own biometric / master password as the gate.
+# No separate PIN is required.
+#
+# This file is kept for backward compatibility only.
 
-mkdir -p "$(dirname "$PIN_HASH_FILE")"
-
-echo "Set a PIN for git push/commit signing authentication."
-echo "This can be the same PIN you use for Proton Pass."
+echo "╔════════════════════════════════════════════════════════╗"
+echo "║  proton-pin-setup is DEPRECATED                       ║"
+echo "║                                                       ║"
+echo "║  The native SSH agent (1Password-style) uses Proton   ║"
+echo "║  Pass's own unlock mechanism. No separate PIN needed. ║"
+echo "║                                                       ║"
+echo "║  Just lock/unlock via the Proton Pass desktop app.    ║"
+echo "╚════════════════════════════════════════════════════════╝"
 echo ""
+
+# Legacy code below — only runs if user explicitly confirms
+read -r -p "Set a legacy PIN anyway? [y/N] " confirm
+[[ "$confirm" =~ ^[Yy] ]] || exit 0
+
+PIN_HASH_FILE="$HOME/.config/proton-pass-pin-hash"
+mkdir -p "$(dirname "$PIN_HASH_FILE")"
 
 while true; do
     read -s -p "Enter PIN: " pin
@@ -26,4 +42,4 @@ done
 
 echo -n "$pin" | sha256sum | cut -d' ' -f1 > "$PIN_HASH_FILE"
 chmod 600 "$PIN_HASH_FILE"
-echo "PIN saved. Git push/commit operations will now require this PIN."
+echo "Legacy PIN saved."

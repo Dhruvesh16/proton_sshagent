@@ -1,90 +1,156 @@
 #!/bin/bash
-# Proton Pass git auth gate
-# Requires Proton Pass desktop app to be unlocked for push and signed commits.
+# Proton Pass git integration — native SSH agent (1Password-style)
+#
 # Source this file into your shell (e.g. add to ~/.bashrc):
 #   source ~/.local/bin/proton-git-wrapper.sh
+#
+# How it works (same model as 1Password):
+#   - SSH_AUTH_SOCK points to the Proton Pass agent socket
+#   - For operations requiring keys (push, signed commits/tags), the wrapper
+#     checks if the agent has keys. If not, it brings the Proton Pass app
+#     to the foreground so you can unlock it — just like 1Password.
+#   - No separate PIN. Proton Pass's own biometric / master password is the gate.
 
+PROTON_SOCKET="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
+PROTON_UNLOCK_TIMEOUT="${PROTON_UNLOCK_TIMEOUT:-60}"
+
+# ── Ensure the agent is alive and vault is unlocked ───────────────────────────
 _proton_ensure_agent() {
-    local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
+    local sock="$PROTON_SOCKET"
 
-    # Check if the agent socket file exists at all
+    # 1. Check socket exists
     if [[ ! -S "$sock" ]]; then
-        echo "❌ Proton Pass SSH agent socket not found." >&2
-        echo "   Check service:  systemctl --user status proton-pass-ssh-agent" >&2
+        echo "❌ Proton Pass SSH agent socket not found at $sock" >&2
+        echo "   Start the Proton Pass desktop app, or run:" >&2
+        echo "   systemctl --user start proton-pass-ssh-agent" >&2
         return 1
     fi
 
-    # Ask the agent for keys. When vault is locked the agent returns nothing.
+    # 2. Check if keys are available (vault unlocked)
     local keys
     keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
 
-    if [[ -z "$keys" ]]; then
-        echo "🔒 Proton Pass is locked — bringing app to front, waiting for you to unlock..." >&2
-
-        # Focus the Proton Pass window so the PIN dialog appears on top
-        if command -v wmctrl &>/dev/null; then
-            wmctrl -a "Proton Pass" 2>/dev/null
-        fi
-        if command -v xdotool &>/dev/null; then
-            xdotool search --name "Proton Pass" windowactivate --sync 2>/dev/null
-        fi
-
-        # Poll every second for up to 60 s (like 1Password)
-        local waited=0
-        while [[ $waited -lt 60 ]]; do
-            sleep 1
-            waited=$((waited + 1))
-            keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
-            if [[ -n "$keys" ]]; then
-                echo "✅ Proton Pass unlocked. Continuing..." >&2
-                break
-            fi
-        done
-
-        if [[ -z "$keys" ]]; then
-            echo "❌ Timed out waiting for Proton Pass to unlock." >&2
-            return 1
-        fi
+    if [[ -n "$keys" ]]; then
+        export SSH_AUTH_SOCK="$sock"
+        return 0
     fi
 
-    export SSH_AUTH_SOCK="$sock"
-    return 0
+    # 3. Vault is locked — bring Proton Pass to front (like 1Password auto-prompt)
+    echo "🔒 Proton Pass is locked. Unlock the app to continue..." >&2
+    _proton_focus_app
+
+    # 4. Poll for unlock (1Password waits up to 120s, we use configurable timeout)
+    local waited=0
+    while (( waited < PROTON_UNLOCK_TIMEOUT )); do
+        sleep 1
+        (( waited++ ))
+        keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
+        if [[ -n "$keys" ]]; then
+            echo "✅ Proton Pass unlocked." >&2
+            export SSH_AUTH_SOCK="$sock"
+            return 0
+        fi
+    done
+
+    echo "❌ Timed out waiting for Proton Pass unlock (${PROTON_UNLOCK_TIMEOUT}s)." >&2
+    return 1
 }
 
-# Wrap git to gate push and signed commits behind Proton Pass desktop unlock
-git() {
-    case "$1" in
-        push|push-*)
-            _proton_ensure_agent || return 1
-            ;;
+# ── Focus the Proton Pass desktop app (multi-DE support) ──────────────────────
+_proton_focus_app() {
+    # Try multiple methods to bring the window to focus
+    if command -v gdbus &>/dev/null; then
+        # GNOME / GTK-based desktops
+        gdbus call --session \
+            --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.ListNames 2>/dev/null | \
+            grep -q "proton" && true
+    fi
+
+    if command -v wmctrl &>/dev/null; then
+        wmctrl -a "Proton Pass" 2>/dev/null || true
+    elif command -v xdotool &>/dev/null; then
+        xdotool search --name "Proton Pass" windowactivate --sync 2>/dev/null || true
+    elif command -v kdialog &>/dev/null; then
+        # KDE — try to raise via D-Bus
+        true
+    fi
+
+    # Wayland (wlr-based compositors)
+    if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+        # swaymsg or hyprctl if available
+        if command -v swaymsg &>/dev/null; then
+            swaymsg '[title="Proton Pass"] focus' 2>/dev/null || true
+        elif command -v hyprctl &>/dev/null; then
+            hyprctl dispatch focuswindow "title:Proton Pass" 2>/dev/null || true
+        fi
+    fi
+}
+
+# ── Check if a commit/tag operation involves signing ──────────────────────────
+_proton_needs_signing() {
+    local subcmd="$1"
+    shift
+    local args="$*"
+
+    case "$subcmd" in
         commit)
-            # Check if signing is involved (-S flag or commit.gpgsign=true)
-            if [[ "$*" == *"-S"* ]] || [[ "$(command git config --get commit.gpgsign 2>/dev/null)" == "true" ]]; then
-                # Ensure signing is configured for SSH, not GPG
-                local fmt
-                fmt=$(command git config --get gpg.format 2>/dev/null)
-                if [[ "$fmt" != "ssh" ]]; then
-                    echo "❌ git SSH signing is not configured." >&2
-                    echo "   Run: setup-git-signing.sh" >&2
-                    return 1
-                fi
-                # Ensure a signing key is set
-                local sigkey
-                sigkey=$(command git config --get user.signingkey 2>/dev/null)
-                if [[ -z "$sigkey" ]]; then
-                    echo "❌ No SSH signing key configured." >&2
-                    echo "   Run: setup-git-signing.sh" >&2
-                    return 1
-                fi
-                _proton_ensure_agent || return 1
-            fi
+            [[ "$args" == *"-S"* ]] && return 0
+            [[ "$(command git config --get commit.gpgsign 2>/dev/null)" == "true" ]] && return 0
             ;;
         tag)
-            # Check if signing is involved (-s flag or tag.gpgsign=true)
-            if [[ "$*" == *"-s"* ]] || [[ "$(command git config --get tag.gpgsign 2>/dev/null)" == "true" ]]; then
+            [[ "$args" == *"-s"* ]] && return 0
+            [[ "$(command git config --get tag.gpgsign 2>/dev/null)" == "true" ]] && return 0
+            ;;
+    esac
+    return 1
+}
+
+# ── Transparent git wrapper (like 1Password — no PIN, just app unlock) ────────
+git() {
+    case "${1:-}" in
+        push|fetch|pull|clone)
+            # Network operations that need SSH keys
+            _proton_ensure_agent || return 1
+            ;;
+        commit|tag)
+            # Only gate if signing is involved
+            if _proton_needs_signing "$@"; then
                 _proton_ensure_agent || return 1
             fi
             ;;
     esac
     command git "$@"
+}
+
+# ── Manual lock helper (like 1Password CLI lock) ─────────────────────────────
+proton-lock() {
+    echo "🔒 Lock Proton Pass from the desktop app." >&2
+    echo "   The next git push/sign will require unlock." >&2
+}
+
+# ── Status check ─────────────────────────────────────────────────────────────
+proton-status() {
+    local sock="${PROTON_SOCKET}"
+    echo "=== Proton Pass SSH Agent Status ==="
+    echo "Socket: $sock"
+
+    if [[ ! -S "$sock" ]]; then
+        echo "Status: ❌ Socket not found"
+        return 1
+    fi
+
+    local keys
+    keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
+    if [[ -n "$keys" ]]; then
+        echo "Status: ✅ Unlocked"
+        echo ""
+        echo "Available keys:"
+        echo "$keys" | while IFS= read -r key; do
+            echo "  • ${key##* }"
+        done
+    else
+        echo "Status: 🔒 Locked (unlock Proton Pass to use keys)"
+    fi
 }

@@ -1,7 +1,8 @@
 [Unit]
-Description=Proton Pass SSH Agent
-After=network-online.target
-Wants=network-online.target
+Description=Proton Pass SSH Agent (native — like 1Password)
+Documentation=https://github.com/dhruvesh16/proton_sshagent
+After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 Type=simple
@@ -9,6 +10,11 @@ ExecStart=%h/.local/bin/proton-pass-ssh-agent-wrapper.sh
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=0
+Environment=DISPLAY=:0
+
+# Security hardening
+ProtectHome=false
+NoNewPrivileges=true
 
 [Install]
 WantedBy=default.target

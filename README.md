@@ -1,180 +1,156 @@
-# proton-ssh-agent
+# Proton Pass — Native SSH Agent for Linux
 
-Portable setup for using **Proton Pass** as an SSH agent on Linux, with a PIN-gated git wrapper for push and signed commits.
+Use **Proton Pass** as a native SSH agent on Linux, the same way [1Password SSH Agent](https://developer.1password.com/docs/ssh/) works:
+
+- **One socket** → set `SSH_AUTH_SOCK` → SSH and git signing just work
+- **No separate PIN** → Proton Pass's own biometric / master password is the gate
+- **Automatic unlock prompts** → when keys are needed, the app is brought to focus
+- **Desktop-first** → auto-detects Proton Pass desktop app's native socket; falls back to `pass-cli`
+
+## How it compares to 1Password
+
+| Feature | 1Password | This project (Proton Pass) |
+|---|---|---|
+| Socket path | `~/.1password/agent.sock` | `~/.ssh/proton-pass-agent.sock` |
+| Auth mechanism | App biometric / master password | App master password / biometric |
+| Extra PIN required | No | No |
+| Git commit signing | Automatic via SSH agent | Automatic via SSH agent |
+| Desktop app integration | Native | Native + pass-cli fallback |
+| Systemd service | Not needed (app manages) | Supervisor for reliability |
+
+## Quick start
+
+```bash
+# 1. Clone
+git clone https://github.com/dhruvesh16/proton_sshagent.git ~/proton
+cd ~/proton
+
+# 2. Install (one command)
+source ./setup.sh
+
+# 3. Test
+ssh -T git@github.com
+proton-status
+```
+
+That's it. SSH and git signing work automatically whenever Proton Pass is unlocked.
 
 ## What's included
 
 | File | Purpose |
 |---|---|
-| `proton-pass-ssh-agent.service` | systemd user unit — keeps the SSH agent running in the background |
-| `proton-pass-ssh-agent-wrapper.sh` | Supervisor loop — waits for Proton Pass login, then starts/restarts the agent |
-| `proton-git-wrapper.sh` | Shell function that wraps `git` and prompts for a PIN before `push` or signed `commit`/`tag` |
-| `proton-pin-setup` | Interactive script to set (or update) your git PIN |
-| `setup-git-signing.sh` | Post-login script — reads your key from the agent and configures `git` SSH commit signing |
-| `setup.sh` | One-shot installer — run this on a fresh machine |
+| `setup.sh` | One-shot installer — sets up everything |
+| `proton-pass-ssh-agent-wrapper.sh` | Agent supervisor — auto-detects desktop socket, falls back to pass-cli |
+| `proton-pass-ssh-agent.service` | Systemd user service — keeps the agent running |
+| `proton-git-wrapper.sh` | Transparent git wrapper — prompts for Proton Pass unlock on push/sign |
+| `setup-git-signing.sh` | One-time git signing configuration |
+| `uninstall.sh` | Clean removal of everything |
 
 ## Requirements
 
-- `pass-cli` installed to `~/.local/bin/pass-cli`
-  Download from [Proton Pass CLI releases](https://github.com/ProtonPass/pass-cli-linux/releases) or via the Proton Pass desktop app.
-- `systemd` (user session)
+- **Proton Pass desktop app** (recommended) — provides native SSH agent socket
+- OR **pass-cli** — [download from GitHub](https://github.com/ProtonPass/pass-cli-linux/releases)
+- Linux with `systemd` (user session)
 - `bash` 4+
-
-## Quick start
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/dhruvesh16/prtoton_sshagent.git ~/proton
-cd ~/proton
-
-# 2. Run the installer
-chmod +x setup.sh
-./setup.sh
-
-# 3. Reload your shell
-source ~/.bashrc          # bash/zsh
-# source ~/.config/fish/config.fish   # fish
-
-# 4. Log into Proton Pass
-pass-cli login
-
-# 5. Configure git SSH signing
-setup-git-signing.sh
-
-# 6. Test SSH key via Proton
-ssh -T git@github.com
-```
-
-> **Fish shell users:** `proton-git-wrapper.sh` is a bash script sourced into bash/zsh.
-> For fish, use [bass](https://github.com/edc/bass) or call `bash -c 'source ~/.local/bin/proton-git-wrapper.sh && git "$@"' -- "$@"` as a fish function.
 
 ## How it works
 
-### SSH Agent (`proton-pass-ssh-agent-wrapper.sh`)
+### Native Socket Detection (like 1Password)
 
-The wrapper script runs in an infinite loop:
+The agent supervisor checks these locations for a native Proton Pass socket:
 
-1. Removes any stale socket at `~/.ssh/proton-pass-agent.sock`
-2. Polls `pass-cli info` every 20 seconds until you're logged in
-3. Starts `pass-cli ssh-agent start --socket-path ...`
-4. If the agent crashes, waits 3 seconds and restarts it
+1. `$PROTON_PASS_AGENT_SOCK` (custom override)
+2. `~/.proton/pass/ssh-agent.sock`
+3. `$XDG_RUNTIME_DIR/proton-pass/ssh-agent.sock`
+4. `~/.proton-pass/ssh-agent.sock`
 
-The systemd service (installed to `~/.config/systemd/user/`) ensures this supervisor starts on login and restarts if it ever exits.
+If found, it symlinks to `~/.ssh/proton-pass-agent.sock` (the canonical path that `SSH_AUTH_SOCK` points to). If no native socket is found, it falls back to starting the agent via `pass-cli ssh-agent start`.
 
-### git PIN gate (`proton-git-wrapper.sh`)
+### Transparent Git Integration
 
-Sourced into your `~/.bashrc`, this wraps the `git` command:
+The `git()` shell wrapper (sourced in `~/.bashrc`) intercepts:
 
-- **`git push`** — always requires PIN
-- **`git commit -S`** or `commit.gpgsign=true` — requires PIN
-- **`git tag -s`** or `tag.gpgsign=true` — requires PIN
+- **`git push`**, **`git fetch`**, **`git pull`**, **`git clone`** → ensures agent is alive
+- **`git commit -S`** or `commit.gpgsign=true` → ensures agent is alive for signing
+- **`git tag -s`** or `tag.gpgsign=true` → ensures agent is alive for signing
 
-A session token is cached to `/tmp/.proton-pin-session-<uid>` for **15 minutes**, so you won't be re-prompted repeatedly during a working session.
+When the vault is locked, the wrapper:
+1. Brings the Proton Pass window to focus (Wayland + X11 support)
+2. Waits up to 60 seconds (configurable via `PROTON_UNLOCK_TIMEOUT`)
+3. Continues the git operation once unlocked
 
-```bash
-# Lock the session manually (forces PIN on next push)
-proton-lock
-```
+No separate PIN. No extra credentials. Just unlock Proton Pass.
 
-### PIN setup (`proton-pin-setup`)
-
-Hashes your PIN with SHA-256 and stores it at `~/.config/proton-pass-pin-hash` (mode 600). Run `proton-pin-setup` any time to change the PIN.
-
-## Manual install (without `setup.sh`)
+### Shell Helpers
 
 ```bash
-# Copy scripts
-cp proton-pass-ssh-agent-wrapper.sh  ~/.local/bin/
-cp proton-git-wrapper.sh             ~/.local/bin/
-cp proton-pin-setup                  ~/.local/bin/
-cp setup-git-signing.sh             ~/.local/bin/
-chmod +x ~/.local/bin/proton-pass-ssh-agent-wrapper.sh \
-         ~/.local/bin/proton-git-wrapper.sh \
-         ~/.local/bin/proton-pin-setup \
-         ~/.local/bin/setup-git-signing.sh
-
-# Install service
-cp proton-pass-ssh-agent.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now proton-pass-ssh-agent.service
-
-# Configure SSH to use Proton socket as default IdentityAgent
-cat >> ~/.ssh/config <<'EOF'
-
-# Proton Pass SSH Agent
-Host *
-    IdentityAgent ~/.ssh/proton-pass-agent.sock
-EOF
-
-# Add to ~/.bashrc (or ~/.config/fish/config.fish for fish)
-echo 'export SSH_AUTH_SOCK="$HOME/.ssh/proton-pass-agent.sock"' >> ~/.bashrc
-echo 'source "$HOME/.local/bin/proton-git-wrapper.sh"'          >> ~/.bashrc
-
-# Set PIN
-proton-pin-setup
-
-source ~/.bashrc
-
-# After logging in with pass-cli login:
-setup-git-signing.sh
+proton-status    # Show agent status and available keys
+proton-lock      # Remind to lock via the desktop app
 ```
 
 ## Git commit signing
 
-After logging in with `pass-cli login`, run:
+After setup, run once (if not auto-configured):
 
 ```bash
 setup-git-signing.sh
 ```
 
-This will:
-
-1. List the SSH keys available in the Proton Pass agent
-2. Let you choose which key to use for signing
-3. Save the public key to `~/.ssh/proton-signing.pub`
-4. Set `git config --global gpg.format ssh`
-5. Set `git config --global user.signingkey ~/.ssh/proton-signing.pub`
-6. Enable `commit.gpgsign true` and `tag.gpgsign true`
-7. Add your key to `~/.ssh/allowed_signers`
-
-To verify signing works:
+This saves your signing key and enables `commit.gpgsign` and `tag.gpgsign` globally — just like 1Password's git signing setup.
 
 ```bash
+# Verify
 git commit --allow-empty -m "test signing" -S
 git log --show-signature -1
 ```
 
-> The git signing inherits `SSH_AUTH_SOCK` from your environment. As long as `setup.sh` ran correctly and you reloaded your shell, commits will be signed automatically.
+## Configuration
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SSH_AUTH_SOCK` | `~/.ssh/proton-pass-agent.sock` | Socket path for SSH and git |
+| `PROTON_PASS_AGENT_SOCK` | (none) | Override native socket detection |
+| `PROTON_PASS_CLI` | auto-detected | Path to pass-cli binary |
+| `PROTON_UNLOCK_TIMEOUT` | `60` | Seconds to wait for vault unlock |
+
+### Per-host SSH config
+
+Like 1Password, you can restrict which hosts use Proton Pass:
+
+```ssh-config
+# Use Proton Pass for GitHub only
+Host github.com
+    IdentityAgent ~/.ssh/proton-pass-agent.sock
+
+# Use default agent for everything else
+Host *
+    # (system default)
+```
 
 ## Service management
 
 ```bash
-# Status
-systemctl --user status proton-pass-ssh-agent
-
-# Restart
-systemctl --user restart proton-pass-ssh-agent
-
-# View logs
-journalctl --user -u proton-pass-ssh-agent -f
-
-# Disable
-systemctl --user disable --now proton-pass-ssh-agent
+systemctl --user status proton-pass-ssh-agent   # Status
+systemctl --user restart proton-pass-ssh-agent   # Restart
+journalctl --user -u proton-pass-ssh-agent -f    # Logs
 ```
 
 ## Uninstall
 
 ```bash
-systemctl --user disable --now proton-pass-ssh-agent
-rm ~/.config/systemd/user/proton-pass-ssh-agent.service
-rm ~/.local/bin/proton-pass-ssh-agent-wrapper.sh
-rm ~/.local/bin/proton-git-wrapper.sh
-rm ~/.local/bin/proton-pin-setup
-rm ~/.local/bin/setup-git-signing.sh
-rm -f ~/.config/proton-pass-pin-hash
-rm -f ~/.ssh/proton-signing.pub
-# Remove lines added to ~/.bashrc / ~/.config/fish/config.fish manually
-# Remove the IdentityAgent block from ~/.ssh/config manually
+bash ./uninstall.sh
+source ~/.bashrc
+```
+
+## Fish shell
+
+Fish support is included. For the git wrapper, use [bass](https://github.com/edc/bass):
+
+```fish
+# In ~/.config/fish/config.fish
+bass source ~/.local/bin/proton-git-wrapper.sh
 ```
 
 ## License

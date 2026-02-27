@@ -1,7 +1,13 @@
 #!/bin/bash
-# setup.sh — Install Proton Pass SSH Agent & git auth gate
-# Run as:  source ./setup.sh
-# (sourcing loads the git wrapper into your CURRENT shell immediately)
+# setup.sh — Proton Pass Native SSH Agent Setup (1Password-style)
+#
+# Sets up Proton Pass as your system SSH agent, just like 1Password:
+#   1. One socket path for everything (SSH, git signing, etc.)
+#   2. No separate PIN — Proton Pass's own unlock is the gate
+#   3. Automatic vault-unlock prompts when keys are needed
+#   4. Auto-detects Proton Pass desktop app's native socket
+#
+# Run as:  source ./setup.sh   (or: bash ./setup.sh)
 
 set -e
 
@@ -12,54 +18,108 @@ SSH_DIR="$HOME/.ssh"
 SOCKET_PATH="$SSH_DIR/proton-pass-agent.sock"
 SSH_CONFIG="$SSH_DIR/config"
 
-echo "=== Proton Pass SSH Agent Setup ==="
+echo "╔══════════════════════════════════════════════════════╗"
+echo "║   Proton Pass — Native SSH Agent Setup              ║"
+echo "║   (1Password-style: unlock app → keys just work)    ║"
+echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# ── 1. Ensure directories exist ──────────────────────────────────────────────
+# ── 1. Ensure directories ────────────────────────────────────────────────────
 mkdir -p "$BIN_DIR" "$SYSTEMD_DIR" "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
-# ── 2. Copy scripts ──────────────────────────────────────────────────────────
-echo "[1/6] Installing scripts to $BIN_DIR ..."
+# ── 2. Detect Proton Pass installation ────────────────────────────────────────
+echo "[1/5] Detecting Proton Pass..."
+
+PASS_CLI=""
+for candidate in \
+    "$(command -v pass-cli 2>/dev/null || true)" \
+    "$HOME/.local/bin/pass-cli" \
+    "/usr/bin/pass-cli" \
+    "/usr/local/bin/pass-cli"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+        PASS_CLI="$candidate"
+        break
+    fi
+done
+
+DESKTOP_APP_FOUND=false
+# Check for Proton Pass desktop app (flatpak, snap, native)
+for app_path in \
+    "/usr/bin/proton-pass" \
+    "/usr/local/bin/proton-pass" \
+    "$HOME/.local/bin/proton-pass"; do
+    if [[ -x "$app_path" ]]; then
+        DESKTOP_APP_FOUND=true
+        break
+    fi
+done
+# Also check if it's running
+if pgrep -f "proton-pass\|Proton Pass" &>/dev/null; then
+    DESKTOP_APP_FOUND=true
+fi
+
+if [[ "$DESKTOP_APP_FOUND" == true ]]; then
+    echo "      ✅ Proton Pass desktop app detected"
+    echo "         Agent will use the desktop app's native socket when available."
+fi
+
+if [[ -n "$PASS_CLI" ]]; then
+    echo "      ✅ pass-cli found at $PASS_CLI"
+    echo "         Agent will use pass-cli as fallback when desktop app isn't running."
+elif [[ "$DESKTOP_APP_FOUND" == false ]]; then
+    echo "      ⚠️  Neither Proton Pass desktop app nor pass-cli found."
+    echo "         Install Proton Pass desktop app or download pass-cli from:"
+    echo "         https://github.com/ProtonPass/pass-cli-linux/releases"
+    echo ""
+    read -r -p "Continue anyway? [y/N] " cont
+    [[ "$cont" =~ ^[Yy] ]] || exit 1
+fi
+
+# ── 3. Install scripts ───────────────────────────────────────────────────────
+echo ""
+echo "[2/5] Installing agent scripts to $BIN_DIR ..."
 cp "$REPO_DIR/proton-pass-ssh-agent-wrapper.sh" "$BIN_DIR/"
 cp "$REPO_DIR/proton-git-wrapper.sh"            "$BIN_DIR/"
 cp "$REPO_DIR/setup-git-signing.sh"             "$BIN_DIR/"
 chmod +x "$BIN_DIR/proton-pass-ssh-agent-wrapper.sh"
 chmod +x "$BIN_DIR/proton-git-wrapper.sh"
 chmod +x "$BIN_DIR/setup-git-signing.sh"
+echo "      Done."
 
-# ── 3. Install systemd service ───────────────────────────────────────────────
-echo "[2/6] Installing systemd user service ..."
+# ── 4. Install & start systemd service ───────────────────────────────────────
+echo ""
+echo "[3/5] Installing systemd user service ..."
 cp "$REPO_DIR/proton-pass-ssh-agent.service" "$SYSTEMD_DIR/"
 systemctl --user daemon-reload
 systemctl --user enable --now proton-pass-ssh-agent.service
 echo "      Service enabled and started."
 
-# ── 4. Configure ~/.ssh/config to use Proton socket as IdentityAgent ─────────
-echo "[3/6] Configuring ~/.ssh/config ..."
+# ── 5. Configure SSH (one-time, like 1Password) ──────────────────────────────
+echo ""
+echo "[4/5] Configuring SSH to use Proton Pass agent..."
+
+# ~/.ssh/config — IdentityAgent directive (like 1Password's Host * block)
 if ! grep -qF "proton-pass-agent.sock" "$SSH_CONFIG" 2>/dev/null; then
     cat >> "$SSH_CONFIG" <<EOF
 
-# Proton Pass SSH Agent — use proton socket for all hosts
+# ── Proton Pass SSH Agent (like 1Password agent.sock) ──
 Host *
     IdentityAgent $SOCKET_PATH
 EOF
     chmod 600 "$SSH_CONFIG"
-    echo "      Added IdentityAgent to $SSH_CONFIG"
+    echo "      Added IdentityAgent to ~/.ssh/config"
 else
-    echo "      IdentityAgent already in $SSH_CONFIG — skipped."
+    echo "      IdentityAgent already configured — skipped."
 fi
 
-# ── 5. Export SSH_AUTH_SOCK in shell configs ──────────────────────────────────
-echo "[4/6] Configuring SSH_AUTH_SOCK in shell configs ..."
-
-# bash / zsh
+# SSH_AUTH_SOCK in shell rc files
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ -f "$SHELL_RC" ] || [[ "$SHELL_RC" == *".bashrc" ]]; then
+    if [[ -f "$SHELL_RC" ]] || [[ "$SHELL_RC" == *".bashrc" ]]; then
         if ! grep -qF "proton-pass-agent.sock" "$SHELL_RC" 2>/dev/null; then
             {
                 echo ""
-                echo "# Proton Pass SSH Agent socket"
+                echo "# Proton Pass SSH Agent (native — like 1Password)"
                 echo "export SSH_AUTH_SOCK=\"$SOCKET_PATH\""
             } >> "$SHELL_RC"
             echo "      Added SSH_AUTH_SOCK to $SHELL_RC"
@@ -69,14 +129,14 @@ for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
     fi
 done
 
-# fish
+# fish shell
 FISH_CONFIG="$HOME/.config/fish/config.fish"
 if command -v fish &>/dev/null; then
     mkdir -p "$(dirname "$FISH_CONFIG")"
     if ! grep -qF "proton-pass-agent.sock" "$FISH_CONFIG" 2>/dev/null; then
         {
             echo ""
-            echo "# Proton Pass SSH Agent socket"
+            echo "# Proton Pass SSH Agent (native — like 1Password)"
             echo "set -gx SSH_AUTH_SOCK \"$SOCKET_PATH\""
         } >> "$FISH_CONFIG"
         echo "      Added SSH_AUTH_SOCK to $FISH_CONFIG"
@@ -85,16 +145,17 @@ if command -v fish &>/dev/null; then
     fi
 fi
 
-# ── 6. Source git auth wrapper ───────────────────────────────────────────────
-echo "[5/6] Wiring git auth wrapper into shell configs ..."
+# ── 6. Wire git wrapper + configure signing ──────────────────────────────────
+echo ""
+echo "[5/5] Configuring git integration..."
 
-# bash / zsh
+# Source git wrapper in shell rc files
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ -f "$SHELL_RC" ] || [[ "$SHELL_RC" == *".bashrc" ]]; then
+    if [[ -f "$SHELL_RC" ]] || [[ "$SHELL_RC" == *".bashrc" ]]; then
         if ! grep -qF "proton-git-wrapper.sh" "$SHELL_RC" 2>/dev/null; then
             {
                 echo ""
-                echo "# Proton Pass git auth gate"
+                echo "# Proton Pass git integration (transparent unlock on push/sign)"
                 echo "source \"\$HOME/.local/bin/proton-git-wrapper.sh\""
             } >> "$SHELL_RC"
             echo "      Sourced git wrapper in $SHELL_RC"
@@ -104,81 +165,72 @@ for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
     fi
 done
 
-# fish (uses a wrapper function via funcsave instead of source)
+# fish shell
 if command -v fish &>/dev/null; then
     if ! grep -qF "proton-git-wrapper" "$FISH_CONFIG" 2>/dev/null; then
         {
             echo ""
-            echo "# Proton Pass git auth gate"
-            echo "# Run: bass source ~/.local/bin/proton-git-wrapper.sh"
-            echo "# Or use setup-git-signing.sh after login"
+            echo "# Proton Pass git integration"
+            echo "# For fish, use: bass source ~/.local/bin/proton-git-wrapper.sh"
         } >> "$FISH_CONFIG"
-        echo "      Fish: git wrapper note added to $FISH_CONFIG (requires 'bass' plugin for full support)"
+        echo "      Fish: git wrapper note added (requires 'bass' plugin)"
     fi
 fi
 
-# ── 7. Set git to use SSH signing format (prevent GPG fallback) ───────────────
-echo "[6/6] Configuring git to use SSH signing format ..."
+# Git SSH signing format (agent will serve keys automatically, like 1Password)
 git config --global gpg.format ssh
-# defaultKeyCommand: git asks the SSH agent directly for a key.
-# This means signing works immediately after unlock with no explicit user.signingkey needed.
 git config --global gpg.ssh.defaultKeyCommand "ssh-add -L"
-echo "      gpg.format=ssh and gpg.ssh.defaultKeyCommand set globally."
+echo "      Git SSH signing format configured."
 
-# ── Auto-configure git SSH signing if agent is already running ────────────────
+# ── Auto-configure git signing if agent is already running ────────────────────
 echo ""
-echo "Checking if Proton Pass is unlocked to auto-configure git signing..."
+echo "Checking if Proton Pass is unlocked..."
 
-# Retry for up to 8 s — the systemd service may need a moment to start
 KEYS=""
 for i in 1 2 3 4; do
     KEYS=$(SSH_AUTH_SOCK="$SOCKET_PATH" ssh-add -L 2>/dev/null)
     if [[ -n "$KEYS" ]]; then break; fi
-    echo "      Waiting for agent... ($i/4)"
     sleep 2
 done
 
 if [[ -n "$KEYS" ]]; then
-    echo "      Agent is live — running setup-git-signing.sh automatically..."
+    echo "      Agent is live — auto-configuring git signing..."
     SSH_AUTH_SOCK="$SOCKET_PATH" bash "$BIN_DIR/setup-git-signing.sh"
 else
-    echo "      Agent not ready (Proton Pass may be locked or not logged in)."
+    echo "      Agent not ready yet (Proton Pass may be locked or starting up)."
     echo "      After unlocking, run:  setup-git-signing.sh"
-    echo "      (git signing will still work via gpg.ssh.defaultKeyCommand once unlocked)"
 fi
 
-echo ""
-# ── Load wrapper into the CURRENT shell (only works when sourced) ────────────
-# Unset any stale git() function from a previous version, then reload fresh.
+# ── Load wrapper into current shell (when sourced) ───────────────────────────
 unset -f git 2>/dev/null || true
-# shellcheck disable=SC1090
 if [[ -f "$BIN_DIR/proton-git-wrapper.sh" ]]; then
-    # source only works when this script is itself sourced
     # shellcheck disable=SC1090
     source "$BIN_DIR/proton-git-wrapper.sh" 2>/dev/null && \
         echo "      git() wrapper loaded into current shell." || true
 fi
 
+# Set SSH_AUTH_SOCK in current shell
+export SSH_AUTH_SOCK="$SOCKET_PATH"
+
 echo ""
-echo "=== Setup complete! ==="
+echo "╔══════════════════════════════════════════════════════╗"
+echo "║   ✅ Setup complete!                                ║"
+echo "╚══════════════════════════════════════════════════════╝"
 echo ""
+echo "How it works (same as 1Password):"
+echo "  • SSH_AUTH_SOCK → $SOCKET_PATH"
+echo "  • When you git push or sign, Proton Pass prompts for unlock"
+echo "  • No separate PIN — your Proton Pass master password is the key"
+echo ""
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "⚠️  You ran this as a script — the git wrapper is NOT yet active here."
-    echo "   Run these NOW in this terminal:"
-    echo ""
-    echo "     unset -f git && source ~/.local/bin/proton-git-wrapper.sh"
-    echo ""
-    echo "   Or start a new terminal (which will source ~/.bashrc automatically)."
-    echo ""
-else
-    echo "✅ Git wrapper is active in this shell."
+    echo "⚠️  You ran this as a script (not sourced)."
+    echo "   Start a new terminal, or run:"
+    echo "     source ~/.bashrc"
     echo ""
 fi
-echo "Next steps:"
-echo "  1. If not logged in yet:"
-echo "       pass-cli login"
-echo "       setup-git-signing.sh"
-echo "  2. Test SSH:"
-echo "       ssh -T git@github.com"
-echo "  3. Test signing (with Proton Pass locked):"
-echo "       git commit --allow-empty -m 'test' -S"
+
+echo "Quick test:"
+echo "  ssh -T git@github.com          # test SSH connection"
+echo "  proton-status                   # check agent status"
+echo "  git commit --allow-empty -S -m 'test'  # test signing"
