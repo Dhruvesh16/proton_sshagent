@@ -62,6 +62,22 @@ git() {
         commit)
             # Check if signing is involved (-S flag or commit.gpgsign=true)
             if [[ "$*" == *"-S"* ]] || [[ "$(command git config --get commit.gpgsign 2>/dev/null)" == "true" ]]; then
+                # Ensure signing is configured for SSH, not GPG
+                local fmt
+                fmt=$(command git config --get gpg.format 2>/dev/null)
+                if [[ "$fmt" != "ssh" ]]; then
+                    echo "❌ git SSH signing is not configured." >&2
+                    echo "   Run: setup-git-signing.sh" >&2
+                    return 1
+                fi
+                # Ensure the Proton Pass SSH agent socket is reachable
+                local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
+                if ! SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
+                    echo "❌ Proton Pass SSH agent is not running or has no keys." >&2
+                    echo "   Make sure you are logged in:  pass-cli login" >&2
+                    echo "   Check service status:         systemctl --user status proton-pass-ssh-agent" >&2
+                    return 1
+                fi
                 _proton_verify_pin || return 1
             fi
             ;;
