@@ -122,7 +122,6 @@ fi
 echo "[6/7] Configuring git to use SSH signing format ..."
 git config --global gpg.format ssh
 echo "      gpg.format=ssh set globally."
-echo "      (Run setup-git-signing.sh after login to finish key setup.)"
 
 # ── 8. Set up PIN (interactive) ───────────────────────────────────────────────
 echo "[7/7] Setting up git PIN ..."
@@ -132,6 +131,17 @@ else
     echo "      PIN already set — skipped. Run 'proton-pin-setup' to change it."
 fi
 
+# ── Auto-configure git SSH signing if agent is already running ────────────────
+echo ""
+echo "Checking if Proton Pass is logged in to auto-configure git signing..."
+if SSH_AUTH_SOCK="$SOCKET_PATH" ssh-add -l &>/dev/null; then
+    echo "Agent is live — running setup-git-signing.sh automatically..."
+    SSH_AUTH_SOCK="$SOCKET_PATH" bash "$BIN_DIR/setup-git-signing.sh"
+else
+    echo "      Agent not ready yet (login required)."
+    echo "      After logging in, run:  setup-git-signing.sh"
+fi
+
 echo ""
 echo "=== Setup complete! ==="
 echo ""
@@ -139,11 +149,10 @@ echo "Next steps:"
 echo "  1. Reload your shell:"
 echo "       bash/zsh:  source ~/.bashrc"
 echo "       fish:      source ~/.config/fish/config.fish"
-echo "  2. Log into Proton Pass:"
+echo "  2. If not logged in yet:"
 echo "       pass-cli login"
-echo "  3. Configure git SSH signing (once logged in):"
 echo "       setup-git-signing.sh"
-echo "  4. Test SSH:"
+echo "  3. Test SSH:"
 echo "       ssh -T git@github.com"
-echo "  5. To lock the git PIN session:"
+echo "  4. To lock the git PIN session:"
 echo "       proton-lock"
