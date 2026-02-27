@@ -7,16 +7,21 @@
 _proton_ensure_agent() {
     local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
 
-    # Check if the Proton Pass desktop app is currently unlocked
-    if ! pass-cli info &>/dev/null; then
-        echo "🔒 Proton Pass is locked. Unlock the Proton Pass desktop app and try again." >&2
+    # Check if the agent socket file exists at all
+    if [[ ! -S "$sock" ]]; then
+        echo "❌ Proton Pass SSH agent socket not found." >&2
+        echo "   Check service:  systemctl --user status proton-pass-ssh-agent" >&2
         return 1
     fi
 
-    # App is unlocked — make sure the agent socket is alive
-    if ! SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
-        echo "❌ Proton Pass SSH agent socket not found." >&2
-        echo "   Check service:  systemctl --user status proton-pass-ssh-agent" >&2
+    # Ask the agent to list accessible keys.
+    # When Proton Pass is locked (PIN screen), the agent socket is present
+    # but returns NO keys — ssh-add -L will output nothing.
+    # Only when the vault is actually unlocked are keys returned.
+    local keys
+    keys=$(SSH_AUTH_SOCK="$sock" ssh-add -L 2>/dev/null)
+    if [[ -z "$keys" ]]; then
+        echo "🔒 Proton Pass is locked. Unlock the Proton Pass desktop app and try again." >&2
         return 1
     fi
 
