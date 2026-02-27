@@ -19,25 +19,23 @@ mkdir -p "$BIN_DIR" "$SYSTEMD_DIR" "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
 # ── 2. Copy scripts ──────────────────────────────────────────────────────────
-echo "[1/7] Installing scripts to $BIN_DIR ..."
+echo "[1/6] Installing scripts to $BIN_DIR ..."
 cp "$REPO_DIR/proton-pass-ssh-agent-wrapper.sh" "$BIN_DIR/"
 cp "$REPO_DIR/proton-git-wrapper.sh"            "$BIN_DIR/"
-cp "$REPO_DIR/proton-pin-setup"                 "$BIN_DIR/"
 cp "$REPO_DIR/setup-git-signing.sh"             "$BIN_DIR/"
 chmod +x "$BIN_DIR/proton-pass-ssh-agent-wrapper.sh"
 chmod +x "$BIN_DIR/proton-git-wrapper.sh"
-chmod +x "$BIN_DIR/proton-pin-setup"
 chmod +x "$BIN_DIR/setup-git-signing.sh"
 
 # ── 3. Install systemd service ───────────────────────────────────────────────
-echo "[2/7] Installing systemd user service ..."
+echo "[2/6] Installing systemd user service ..."
 cp "$REPO_DIR/proton-pass-ssh-agent.service" "$SYSTEMD_DIR/"
 systemctl --user daemon-reload
 systemctl --user enable --now proton-pass-ssh-agent.service
 echo "      Service enabled and started."
 
 # ── 4. Configure ~/.ssh/config to use Proton socket as IdentityAgent ─────────
-echo "[3/7] Configuring ~/.ssh/config ..."
+echo "[3/6] Configuring ~/.ssh/config ..."
 if ! grep -qF "proton-pass-agent.sock" "$SSH_CONFIG" 2>/dev/null; then
     cat >> "$SSH_CONFIG" <<EOF
 
@@ -52,7 +50,7 @@ else
 fi
 
 # ── 5. Export SSH_AUTH_SOCK in shell configs ──────────────────────────────────
-echo "[4/7] Configuring SSH_AUTH_SOCK in shell configs ..."
+echo "[4/6] Configuring SSH_AUTH_SOCK in shell configs ..."
 
 # bash / zsh
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -86,8 +84,8 @@ if command -v fish &>/dev/null; then
     fi
 fi
 
-# ── 6. Source git PIN wrapper ─────────────────────────────────────────────────
-echo "[5/7] Wiring git PIN wrapper into shell configs ..."
+# ── 6. Source git auth wrapper ───────────────────────────────────────────────
+echo "[5/6] Wiring git auth wrapper into shell configs ..."
 
 # bash / zsh
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -95,7 +93,7 @@ for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if ! grep -qF "proton-git-wrapper.sh" "$SHELL_RC" 2>/dev/null; then
             {
                 echo ""
-                echo "# Proton Pass git PIN gate"
+                echo "# Proton Pass git auth gate"
                 echo "source \"\$HOME/.local/bin/proton-git-wrapper.sh\""
             } >> "$SHELL_RC"
             echo "      Sourced git wrapper in $SHELL_RC"
@@ -110,7 +108,7 @@ if command -v fish &>/dev/null; then
     if ! grep -qF "proton-git-wrapper" "$FISH_CONFIG" 2>/dev/null; then
         {
             echo ""
-            echo "# Proton Pass git PIN gate"
+            echo "# Proton Pass git auth gate"
             echo "# Run: bass source ~/.local/bin/proton-git-wrapper.sh"
             echo "# Or use setup-git-signing.sh after login"
         } >> "$FISH_CONFIG"
@@ -119,17 +117,9 @@ if command -v fish &>/dev/null; then
 fi
 
 # ── 7. Set git to use SSH signing format (prevent GPG fallback) ───────────────
-echo "[6/7] Configuring git to use SSH signing format ..."
+echo "[6/6] Configuring git to use SSH signing format ..."
 git config --global gpg.format ssh
 echo "      gpg.format=ssh set globally."
-
-# ── 8. Set up PIN (interactive) ───────────────────────────────────────────────
-echo "[7/7] Setting up git PIN ..."
-if [ ! -f "$HOME/.config/proton-pass-pin-hash" ]; then
-    "$BIN_DIR/proton-pin-setup"
-else
-    echo "      PIN already set — skipped. Run 'proton-pin-setup' to change it."
-fi
 
 # ── Auto-configure git SSH signing if agent is already running ────────────────
 echo ""
@@ -154,5 +144,3 @@ echo "       pass-cli login"
 echo "       setup-git-signing.sh"
 echo "  3. Test SSH:"
 echo "       ssh -T git@github.com"
-echo "  4. To lock the git PIN session:"
-echo "       proton-lock"
