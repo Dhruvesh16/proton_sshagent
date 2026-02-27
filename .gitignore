@@ -1,0 +1,13 @@
+# Ignore any local secrets or session files
+*.sock
+.proton-pin-session-*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

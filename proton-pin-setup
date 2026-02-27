@@ -1,0 +1,29 @@
+#!/bin/bash
+# Setup PIN for Proton Pass git authentication gate
+PIN_HASH_FILE="$HOME/.config/proton-pass-pin-hash"
+
+mkdir -p "$(dirname "$PIN_HASH_FILE")"
+
+echo "Set a PIN for git push/commit signing authentication."
+echo "This can be the same PIN you use for Proton Pass."
+echo ""
+
+while true; do
+    read -s -p "Enter PIN: " pin
+    echo
+    if [ -z "$pin" ]; then
+        echo "PIN cannot be empty."
+        continue
+    fi
+    read -s -p "Confirm PIN: " pin2
+    echo
+    if [ "$pin" != "$pin2" ]; then
+        echo "PINs don't match. Try again."
+        continue
+    fi
+    break
+done
+
+echo -n "$pin" | sha256sum | cut -d' ' -f1 > "$PIN_HASH_FILE"
+chmod 600 "$PIN_HASH_FILE"
+echo "PIN saved. Git push/commit operations will now require this PIN."
