@@ -19,7 +19,7 @@ mkdir -p "$BIN_DIR" "$SYSTEMD_DIR" "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
 # ── 2. Copy scripts ──────────────────────────────────────────────────────────
-echo "[1/6] Installing scripts to $BIN_DIR ..."
+echo "[1/7] Installing scripts to $BIN_DIR ..."
 cp "$REPO_DIR/proton-pass-ssh-agent-wrapper.sh" "$BIN_DIR/"
 cp "$REPO_DIR/proton-git-wrapper.sh"            "$BIN_DIR/"
 cp "$REPO_DIR/proton-pin-setup"                 "$BIN_DIR/"
@@ -30,14 +30,14 @@ chmod +x "$BIN_DIR/proton-pin-setup"
 chmod +x "$BIN_DIR/setup-git-signing.sh"
 
 # ── 3. Install systemd service ───────────────────────────────────────────────
-echo "[2/6] Installing systemd user service ..."
+echo "[2/7] Installing systemd user service ..."
 cp "$REPO_DIR/proton-pass-ssh-agent.service" "$SYSTEMD_DIR/"
 systemctl --user daemon-reload
 systemctl --user enable --now proton-pass-ssh-agent.service
 echo "      Service enabled and started."
 
 # ── 4. Configure ~/.ssh/config to use Proton socket as IdentityAgent ─────────
-echo "[3/6] Configuring ~/.ssh/config ..."
+echo "[3/7] Configuring ~/.ssh/config ..."
 if ! grep -qF "proton-pass-agent.sock" "$SSH_CONFIG" 2>/dev/null; then
     cat >> "$SSH_CONFIG" <<EOF
 
@@ -52,7 +52,7 @@ else
 fi
 
 # ── 5. Export SSH_AUTH_SOCK in shell configs ──────────────────────────────────
-echo "[4/6] Configuring SSH_AUTH_SOCK in shell configs ..."
+echo "[4/7] Configuring SSH_AUTH_SOCK in shell configs ..."
 
 # bash / zsh
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -87,7 +87,7 @@ if command -v fish &>/dev/null; then
 fi
 
 # ── 6. Source git PIN wrapper ─────────────────────────────────────────────────
-echo "[5/6] Wiring git PIN wrapper into shell configs ..."
+echo "[5/7] Wiring git PIN wrapper into shell configs ..."
 
 # bash / zsh
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -118,8 +118,14 @@ if command -v fish &>/dev/null; then
     fi
 fi
 
-# ── 7. Set up PIN (interactive) ───────────────────────────────────────────────
-echo "[6/6] Setting up git PIN ..."
+# ── 7. Set git to use SSH signing format (prevent GPG fallback) ───────────────
+echo "[6/7] Configuring git to use SSH signing format ..."
+git config --global gpg.format ssh
+echo "      gpg.format=ssh set globally."
+echo "      (Run setup-git-signing.sh after login to finish key setup.)"
+
+# ── 8. Set up PIN (interactive) ───────────────────────────────────────────────
+echo "[7/7] Setting up git PIN ..."
 if [ ! -f "$HOME/.config/proton-pass-pin-hash" ]; then
     "$BIN_DIR/proton-pin-setup"
 else
