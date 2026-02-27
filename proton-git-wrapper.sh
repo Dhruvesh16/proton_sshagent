@@ -70,6 +70,14 @@ git() {
                     echo "   Run: setup-git-signing.sh" >&2
                     return 1
                 fi
+                # Ensure a signing key is set
+                local sigkey
+                sigkey=$(command git config --get user.signingkey 2>/dev/null)
+                if [[ -z "$sigkey" ]]; then
+                    echo "❌ No SSH signing key configured." >&2
+                    echo "   Run: setup-git-signing.sh" >&2
+                    return 1
+                fi
                 # Ensure the Proton Pass SSH agent socket is reachable
                 local sock="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
                 if ! SSH_AUTH_SOCK="$sock" ssh-add -l &>/dev/null; then
