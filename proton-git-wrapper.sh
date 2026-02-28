@@ -1,5 +1,5 @@
 #!/bin/bash
-# Proton Pass git integration — native SSH agent (1Password-style)
+# Proton Pass git integration — pass-cli native SSH agent
 #
 # Source this file into your shell (e.g. add to ~/.bashrc):
 #   source ~/.local/bin/proton-git-wrapper.sh
@@ -7,18 +7,18 @@
 # How it works:
 #   - SSH_AUTH_SOCK points to the Proton Pass agent socket
 #   - For operations requiring keys (push, signed commits/tags), the wrapper
-#     verifies Proton Pass is unlocked via a session timeout mechanism.
-#   - When the session expires, the agent is restarted (clearing cached keys)
-#     and the user must unlock Proton Pass to continue.
-#   - No separate PIN. Proton Pass's own master password / biometric is the gate.
+#     verifies the agent is running and keys are available.
+#   - If no session exists, triggers `pass-cli login --interactive` directly
+#     in the terminal — no desktop app dependency.
+#   - Session timeout mechanism kills the agent to purge cached keys.
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 PROTON_SOCKET="${SSH_AUTH_SOCK:-$HOME/.ssh/proton-pass-agent.sock}"
 PROTON_UNLOCK_TIMEOUT="${PROTON_UNLOCK_TIMEOUT:-60}"      # seconds to wait for unlock
-PROTON_SESSION_TIMEOUT="${PROTON_SESSION_TIMEOUT:-900}"    # 15 min session (like 1Password auto-lock)
+PROTON_SESSION_TIMEOUT="${PROTON_SESSION_TIMEOUT:-900}"    # 15 min session
 PROTON_SESSION_FILE="/tmp/.proton-session-$(id -u)"
 
-# ── Session management (auto-lock after timeout, like 1Password / sudo) ───────
+# ── Session management (auto-lock after timeout) ───────────────────────────
 _proton_session_valid() {
     [[ -f "$PROTON_SESSION_FILE" ]] || return 1
     local ts now
@@ -58,15 +58,19 @@ _proton_ensure_agent() {
 
     # ── Session expired or agent not responding ───────────────────────────────
     # Kill agent to purge any cached keys (this is the key security measure —
-    # pass-cli's agent caches keys forever, unlike 1Password which stops
-    # serving keys when the vault locks)
+    # pass-cli's agent caches keys forever, so we kill it on session expiry)
     _proton_kill_agent
     echo "" >&2
     echo "🔒 Proton Pass session expired (auto-lock after $(( PROTON_SESSION_TIMEOUT / 60 ))min)." >&2
-    echo "   Unlock Proton Pass to continue..." >&2
-    _proton_focus_app
+    echo "   Authenticating via pass-cli..." >&2
 
-    # Wait for the systemd service to restart the agent and keys to become available
+    # Trigger pass-cli login if no active session
+    if ! _proton_has_cli_session; then
+        _proton_cli_login || return 1
+    fi
+
+    # Wait for the systemd service to detect the session and start the agent
+    echo "   Waiting for SSH agent to start..." >&2
     local waited=0
     while (( waited < PROTON_UNLOCK_TIMEOUT )); do
         sleep 1
@@ -86,36 +90,34 @@ _proton_ensure_agent() {
         fi
     done
 
-    echo "❌ Timed out waiting for Proton Pass (${PROTON_UNLOCK_TIMEOUT}s)." >&2
-    echo "   Make sure Proton Pass is open and unlocked, then try again." >&2
+    echo "❌ Timed out waiting for SSH agent (${PROTON_UNLOCK_TIMEOUT}s)." >&2
+    echo "   Try: proton-login   or   pass-cli login --interactive" >&2
     return 1
 }
 
-# ── Focus the Proton Pass desktop app (multi-DE support) ──────────────────────
-_proton_focus_app() {
-    # KDE Wayland
-    if [[ "${XDG_CURRENT_DESKTOP:-}" == *"KDE"* ]]; then
-        if command -v qdbus &>/dev/null; then
-            # Try to activate Proton Pass via KDE's D-Bus interface
-            local wid
-            wid=$(qdbus org.kde.KWin /KWin org.kde.KWin.getWindowInfo 2>/dev/null | grep -i "proton" || true)
-        fi
-    fi
+# ── Check if pass-cli has an active session ───────────────────────────────────
+_proton_has_cli_session() {
+    local cli
+    cli=$(command -v pass-cli 2>/dev/null || echo "/usr/bin/pass-cli")
+    "$cli" info &>/dev/null
+}
 
-    # X11 tools
-    if command -v wmctrl &>/dev/null; then
-        wmctrl -a "Proton Pass" 2>/dev/null || true
-    elif command -v xdotool &>/dev/null; then
-        xdotool search --name "Proton Pass" windowactivate --sync 2>/dev/null || true
-    fi
-
-    # Wayland (wlr-based compositors)
-    if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        if command -v swaymsg &>/dev/null; then
-            swaymsg '[title="Proton Pass"] focus' 2>/dev/null || true
-        elif command -v hyprctl &>/dev/null; then
-            hyprctl dispatch focuswindow "title:Proton Pass" 2>/dev/null || true
-        fi
+# ── Trigger pass-cli login (interactive, in-terminal) ─────────────────────────
+_proton_cli_login() {
+    local cli
+    cli=$(command -v pass-cli 2>/dev/null || echo "/usr/bin/pass-cli")
+    echo "" >&2
+    echo "🔑 Proton Pass login required." >&2
+    echo "   Launching pass-cli login..." >&2
+    echo "" >&2
+    if "$cli" login --interactive; then
+        echo "" >&2
+        echo "✅ Login successful." >&2
+        return 0
+    else
+        echo "" >&2
+        echo "❌ Login failed or cancelled." >&2
+        return 1
     fi
 }
 
@@ -141,8 +143,8 @@ _proton_needs_signing() {
 # ── Transparent git wrapper ──────────────────────────────────────────────────
 git() {
     case "${1:-}" in
-        push|fetch|pull|clone)
-            # All network operations require verified session
+        push)
+            # Push needs SSH keys for authentication
             _proton_ensure_agent || return 1
             ;;
         commit|tag)
@@ -166,7 +168,13 @@ proton-lock() {
 # ── proton-unlock: start a fresh session (verifies agent is alive) ────────────
 proton-unlock() {
     local sock="$PROTON_SOCKET"
-    echo "Checking Proton Pass agent..." >&2
+
+    # If no CLI session, trigger login first
+    if ! _proton_has_cli_session; then
+        _proton_cli_login || return 1
+    fi
+
+    echo "Waiting for SSH agent..." >&2
 
     # Wait for agent to be available (systemd may need to restart it)
     local waited=0
@@ -185,7 +193,7 @@ proton-unlock() {
         (( waited++ ))
     done
 
-    echo "❌ Agent not available. Make sure Proton Pass is open and unlocked." >&2
+    echo "❌ Agent not available. Try: proton-login" >&2
     return 1
 }
 
@@ -225,4 +233,25 @@ proton-status() {
         echo "Session: 🔒 Expired (next git push/sign will require unlock)"
     fi
     echo "Timeout: ${PROTON_SESSION_TIMEOUT}s (set PROTON_SESSION_TIMEOUT to change)"
+}
+
+# ── proton-login: authenticate with pass-cli and start session ────────────────
+proton-login() {
+    if _proton_has_cli_session; then
+        echo "Already logged in." >&2
+    else
+        _proton_cli_login || return 1
+    fi
+    # Wait for agent to come up (systemd supervisor will detect the session)
+    proton-unlock
+}
+
+# ── proton-logout: end pass-cli session and kill agent ────────────────────────
+proton-logout() {
+    _proton_session_invalidate
+    _proton_kill_agent
+    local cli
+    cli=$(command -v pass-cli 2>/dev/null || echo "/usr/bin/pass-cli")
+    "$cli" logout 2>/dev/null || true
+    echo "🔒 Logged out. Session ended, agent keys purged." >&2
 }

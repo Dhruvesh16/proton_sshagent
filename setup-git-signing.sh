@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup-git-signing.sh — Configure git SSH signing via Proton Pass agent
 #
-# Like 1Password: the agent serves your signing key automatically.
+# The agent serves your signing key automatically.
 # Run this once after unlocking Proton Pass for the first time.
 
 set -e
@@ -58,7 +58,7 @@ echo ""
 echo "$CHOSEN_KEY" > "$PUBKEY_FILE"
 chmod 644 "$PUBKEY_FILE"
 
-# ── 5. Configure git (like 1Password — automatic SSH signing) ────────────────
+# ── 5. Configure git (automatic SSH signing) ──────────────────────
 git config --global gpg.format ssh
 git config --global user.signingkey "$PUBKEY_FILE"
 git config --global commit.gpgsign true

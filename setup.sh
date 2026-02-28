@@ -1,11 +1,11 @@
 #!/bin/bash
-# setup.sh — Proton Pass Native SSH Agent Setup (1Password-style)
+# setup.sh — Proton Pass Native SSH Agent Setup
 #
-# Sets up Proton Pass as your system SSH agent, just like 1Password:
+# Sets up Proton Pass as your system SSH agent using pass-cli:
 #   1. One socket path for everything (SSH, git signing, etc.)
-#   2. No separate PIN — Proton Pass's own unlock is the gate
-#   3. Automatic vault-unlock prompts when keys are needed
-#   4. Auto-detects Proton Pass desktop app's native socket
+#   2. Authenticate via pass-cli login (interactive terminal auth)
+#   3. Automatic login prompts when keys are needed (git push/sign)
+#   4. Session timeout purges cached keys for security
 #
 # Run as:  source ./setup.sh   (or: bash ./setup.sh)
 
@@ -20,7 +20,7 @@ SSH_CONFIG="$SSH_DIR/config"
 
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║   Proton Pass — Native SSH Agent Setup              ║"
-echo "║   (1Password-style: unlock app → keys just work)    ║"
+echo "║   (pass-cli authentication, no desktop app needed)  ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 
@@ -28,8 +28,8 @@ echo ""
 mkdir -p "$BIN_DIR" "$SYSTEMD_DIR" "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
-# ── 2. Detect Proton Pass installation ────────────────────────────────────────
-echo "[1/5] Detecting Proton Pass..."
+# ── 2. Detect pass-cli ────────────────────────────────────────────────────────
+echo "[1/5] Detecting pass-cli..."
 
 PASS_CLI=""
 for candidate in \
@@ -43,34 +43,11 @@ for candidate in \
     fi
 done
 
-DESKTOP_APP_FOUND=false
-# Check for Proton Pass desktop app (flatpak, snap, native)
-for app_path in \
-    "/usr/bin/proton-pass" \
-    "/usr/local/bin/proton-pass" \
-    "$HOME/.local/bin/proton-pass"; do
-    if [[ -x "$app_path" ]]; then
-        DESKTOP_APP_FOUND=true
-        break
-    fi
-done
-# Also check if it's running
-if pgrep -f "proton-pass\|Proton Pass" &>/dev/null; then
-    DESKTOP_APP_FOUND=true
-fi
-
-if [[ "$DESKTOP_APP_FOUND" == true ]]; then
-    echo "      ✅ Proton Pass desktop app detected"
-    echo "         Agent will use the desktop app's native socket when available."
-fi
-
 if [[ -n "$PASS_CLI" ]]; then
     echo "      ✅ pass-cli found at $PASS_CLI"
-    echo "         Agent will use pass-cli as fallback when desktop app isn't running."
-elif [[ "$DESKTOP_APP_FOUND" == false ]]; then
-    echo "      ⚠️  Neither Proton Pass desktop app nor pass-cli found."
-    echo "         Install Proton Pass desktop app or download pass-cli from:"
-    echo "         https://github.com/ProtonPass/pass-cli-linux/releases"
+else
+    echo "      ⚠️  pass-cli not found."
+    echo "         Download from: https://github.com/ProtonPass/pass-cli-linux/releases"
     echo ""
     read -r -p "Continue anyway? [y/N] " cont
     [[ "$cont" =~ ^[Yy] ]] || exit 1
@@ -95,15 +72,15 @@ systemctl --user daemon-reload
 systemctl --user enable --now proton-pass-ssh-agent.service
 echo "      Service enabled and started."
 
-# ── 5. Configure SSH (one-time, like 1Password) ──────────────────────────────
+# ── 5. Configure SSH ──────────────────────────────────────────────────────────
 echo ""
 echo "[4/5] Configuring SSH to use Proton Pass agent..."
 
-# ~/.ssh/config — IdentityAgent directive (like 1Password's Host * block)
+# ~/.ssh/config — IdentityAgent directive
 if ! grep -qF "proton-pass-agent.sock" "$SSH_CONFIG" 2>/dev/null; then
     cat >> "$SSH_CONFIG" <<EOF
 
-# ── Proton Pass SSH Agent (like 1Password agent.sock) ──
+# ── Proton Pass SSH Agent (pass-cli native) ──
 Host *
     IdentityAgent $SOCKET_PATH
 EOF
@@ -119,7 +96,7 @@ for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if ! grep -qF "proton-pass-agent.sock" "$SHELL_RC" 2>/dev/null; then
             {
                 echo ""
-                echo "# Proton Pass SSH Agent (native — like 1Password)"
+                echo "# Proton Pass SSH Agent (pass-cli native)"
                 echo "export SSH_AUTH_SOCK=\"$SOCKET_PATH\""
             } >> "$SHELL_RC"
             echo "      Added SSH_AUTH_SOCK to $SHELL_RC"
@@ -136,7 +113,7 @@ if command -v fish &>/dev/null; then
     if ! grep -qF "proton-pass-agent.sock" "$FISH_CONFIG" 2>/dev/null; then
         {
             echo ""
-            echo "# Proton Pass SSH Agent (native — like 1Password)"
+            echo "# Proton Pass SSH Agent (pass-cli native)"
             echo "set -gx SSH_AUTH_SOCK \"$SOCKET_PATH\""
         } >> "$FISH_CONFIG"
         echo "      Added SSH_AUTH_SOCK to $FISH_CONFIG"
@@ -177,7 +154,7 @@ if command -v fish &>/dev/null; then
     fi
 fi
 
-# Git SSH signing format (agent will serve keys automatically, like 1Password)
+# Git SSH signing format (agent serves keys automatically)
 git config --global gpg.format ssh
 git config --global gpg.ssh.defaultKeyCommand "ssh-add -L"
 echo "      Git SSH signing format configured."
@@ -217,10 +194,11 @@ echo "╔═══════════════════════�
 echo "║   ✅ Setup complete!                                ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-echo "How it works (same as 1Password):"
+echo "How it works:"
 echo "  • SSH_AUTH_SOCK → $SOCKET_PATH"
-echo "  • When you git push or sign, Proton Pass prompts for unlock"
-echo "  • No separate PIN — your Proton Pass master password is the key"
+echo "  • Authenticate once:  proton-login  (or: pass-cli login --interactive)"
+echo "  • git push / signed commits just work while session is active"
+echo "  • Session auto-locks after 15min (configurable)"
 echo ""
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

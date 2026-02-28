@@ -1,15 +1,15 @@
 [Unit]
-Description=Proton Pass SSH Agent (native — like 1Password)
+Description=Proton Pass SSH Agent (pass-cli native)
 Documentation=https://github.com/dhruvesh16/proton_sshagent
 After=graphical-session.target
 Wants=graphical-session.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/proton-pass-ssh-agent-wrapper.sh
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 Environment=DISPLAY=:0
 
 # Security hardening
